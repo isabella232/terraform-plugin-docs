@@ -48,7 +48,8 @@ type nestedType struct {
 	anchorID string
 	path     []string
 	block    *tfjson.SchemaBlock
-	att      *cty.Type
+	object   *cty.Type
+	root     *tfjson.SchemaAttribute
 }
 
 func writeAttribute(w io.Writer, path []string, att *tfjson.SchemaAttribute) ([]nestedType, error) {
@@ -83,7 +84,8 @@ func writeAttribute(w io.Writer, path []string, att *tfjson.SchemaAttribute) ([]
 		nestedTypes = append(nestedTypes, nestedType{
 			anchorID: anchorID,
 			path:     path,
-			att:      &att.AttributeType,
+			object:   &att.AttributeType,
+			root:     att,
 		})
 	case att.AttributeType.IsCollectionType() && att.AttributeType.ElementType().IsObjectType():
 		_, err = io.WriteString(w, " (see [below for nested schema](#"+anchorID+"))")
@@ -95,7 +97,8 @@ func writeAttribute(w io.Writer, path []string, att *tfjson.SchemaAttribute) ([]
 		nestedTypes = append(nestedTypes, nestedType{
 			anchorID: anchorID,
 			path:     path,
-			att:      &nt,
+			object:   &nt,
+			root:     att,
 		})
 	}
 
@@ -196,7 +199,7 @@ func writeBlockChildren(w io.Writer, parents []string, block *tfjson.SchemaBlock
 			}
 
 			if att, ok := block.Attributes[name]; ok {
-				nt, err := writeAttribute(w, path, att)
+				nt, err := writeAttribute(w, path, att, nil)
 				if err != nil {
 					return fmt.Errorf("unable to render attribute %q: %w", name, err)
 				}
@@ -240,13 +243,17 @@ func writeNestedTypes(w io.Writer, nestedTypes []nestedType) error {
 			if err != nil {
 				return err
 			}
-		case nt.att != nil:
-			err = writeObjectChildren(w, nt.path, *nt.att)
+		case nt.object != nil:
+			if nt.root == nil {
+				return fmt.Errorf("no root attribute specified for %s", strings.Join(nt.path, "."))
+			}
+
+			err = writeObjectChildren(w, nt.path, *nt.object, nt.root)
 			if err != nil {
 				return err
 			}
 		default:
-			return fmt.Errorf("missing information on nested block: %v", nt.path)
+			return fmt.Errorf("missing information on nested block: %s", strings.Join(nt.path, "."))
 		}
 
 		_, err = io.WriteString(w, "\n")
@@ -258,7 +265,7 @@ func writeNestedTypes(w io.Writer, nestedTypes []nestedType) error {
 	return nil
 }
 
-func writeObjectAttribute(w io.Writer, path []string, att cty.Type) ([]nestedType, error) {
+func writeObjectAttribute(w io.Writer, path []string, att cty.Type, root *tfjson.SchemaAttribute) ([]nestedType, error) {
 	name := path[len(path)-1]
 
 	_, err := io.WriteString(w, "- **"+name+"** (")
@@ -292,7 +299,8 @@ func writeObjectAttribute(w io.Writer, path []string, att cty.Type) ([]nestedTyp
 		nestedTypes = append(nestedTypes, nestedType{
 			anchorID: anchorID,
 			path:     path,
-			att:      &att,
+			object:   &att,
+			root:     root,
 		})
 	case att.IsCollectionType() && att.ElementType().IsObjectType():
 		_, err = io.WriteString(w, " (see [below for nested schema](#"+anchorID+"))")
@@ -304,7 +312,8 @@ func writeObjectAttribute(w io.Writer, path []string, att cty.Type) ([]nestedTyp
 		nestedTypes = append(nestedTypes, nestedType{
 			anchorID: anchorID,
 			path:     path,
-			att:      &nt,
+			object:   &nt,
+			root:     root,
 		})
 	}
 
@@ -316,7 +325,7 @@ func writeObjectAttribute(w io.Writer, path []string, att cty.Type) ([]nestedTyp
 	return nestedTypes, nil
 }
 
-func writeObjectChildren(w io.Writer, parents []string, ty cty.Type) error {
+func writeObjectChildren(w io.Writer, parents []string, ty cty.Type, root *tfjson.SchemaAttribute) error {
 	atts := ty.AttributeTypes()
 	sortedNames := []string{}
 	for n := range atts {
@@ -329,7 +338,7 @@ func writeObjectChildren(w io.Writer, parents []string, ty cty.Type) error {
 		att := atts[name]
 		path := append(parents, name)
 
-		nt, err := writeObjectAttribute(w, path, att)
+		nt, err := writeObjectAttribute(w, path, att, root)
 		if err != nil {
 			return fmt.Errorf("unable to render attribute %q: %w", name, err)
 		}
